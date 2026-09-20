@@ -1,0 +1,40 @@
+# OPTIONAL: auto-deploy the backend when `main` passes CI.
+#
+# Disabled by default — it does nothing until you add a deploy hook secret.
+# Both Render and Railway can also deploy straight from GitHub with no
+# workflow at all, which is simpler; use this only if you want the deploy
+# gated on CI passing.
+#
+# To enable:
+#   Render  — Settings -> Deploy Hook, copy the URL, save it as the
+#             RENDER_DEPLOY_HOOK_URL repository secret.
+#   Railway — create a token, save it as RAILWAY_TOKEN, and swap the step below
+#             for `railway up --service paperswipe-api`.
+name: Deploy backend
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Trigger Render deploy
+    runs-on: ubuntu-latest
+    # Never deploy a red build.
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Check for a deploy hook
+        id: guard
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "No RENDER_DEPLOY_HOOK_URL secret set — skipping deploy."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger deploy
+        if: steps.guard.outputs.configured == 'true'
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"

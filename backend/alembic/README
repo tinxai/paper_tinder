@@ -1,0 +1,8 @@
+Alembic migrations for the PaperSwipe backend.
+
+The database URL comes from the DATABASE_URL environment variable via
+app.core.config — it is never stored in alembic.ini.
+
+  alembic upgrade head          # apply all migrations
+  alembic downgrade -1          # roll back one
+  alembic revision --autogenerate -m "message"

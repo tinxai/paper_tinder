@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to a PR cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (lint + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: paperswipe
+          POSTGRES_PASSWORD: paperswipe
+          POSTGRES_DB: paperswipe_test
+        ports:
+          - 5432:5432
+        # Do not start the job until Postgres actually accepts connections.
+        options: >-
+          --health-cmd "pg_isready -U paperswipe"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://paperswipe:paperswipe@localhost:5432/paperswipe_test
+      SECRET_KEY: ci-only-secret-not-used-in-production
+      ENVIRONMENT: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        # The pinned lockfile, so CI tests exactly what runs in production.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Ruff (lint + format check)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run migrations
+        # Proves the Alembic migration applies to an empty database.
+        run: alembic upgrade head
+
+      - name: Seed suggested interests
+        run: python -m app.scripts.seed
+
+      - name: Pytest
+        # Semantic Scholar is mocked throughout; no network access is needed.
+        run: pytest -q
+
+  mobile:
+    name: Mobile (lint + types + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` installs strictly from the lockfile.
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Jest
+        run: npm run test:ci
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the backend image
+        # Build only — nothing is pushed, and no credentials are needed.
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          tags: paperswipe-api:ci

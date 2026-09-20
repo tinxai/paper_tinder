@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: paperswipe-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-paperswipe}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paperswipe}
+      POSTGRES_DB: ${POSTGRES_DB:-paperswipe}
+    ports:
+      # Exposed so you can run the backend (and tests) outside Docker too.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the separate database used by `pytest`.
+      - ./backend/scripts/init-test-db.sh:/docker-entrypoint-initdb.d/init-test-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paperswipe} -d ${POSTGRES_DB:-paperswipe}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: paperswipe-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-paperswipe}:${POSTGRES_PASSWORD:-paperswipe}@db:5432/${POSTGRES_DB:-paperswipe}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    # Migrate, seed, then serve. Safe to re-run: both steps are idempotent.
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.scripts.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  # Named volume — `docker compose down` leaves it intact.
+  # Removing data is an explicit opt-in: `docker compose down -v`.
+  postgres_data:
